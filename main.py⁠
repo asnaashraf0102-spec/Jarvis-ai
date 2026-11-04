@@ -1,0 +1,352 @@
+import os
+import base64
+from pathlib import Path
+from flask import Flask, render_template_string, request, jsonify
+import requests
+
+# 1. Flask App Initialization
+app = Flask(__name__)
+
+# 2. Venice Client Integration (Venice.ai API Setup)
+VENICE_BASE_URL = os.environ.get("VENICE_BASE_URL", "https://api.venice.ai/api/v1")
+VENICE_API_KEY = os.environ.get("VENICE_API_KEY", "")
+
+class VeniceAdvancedClient:
+    def __init__(self, api_key: str = None):
+        self.api_key = api_key or VENICE_API_KEY
+        self.base_url = VENICE_BASE_URL.rstrip("/")
+        self.session = requests.Session()
+        self.update_headers()
+
+    def update_headers(self, key: str = None):
+        if key:
+            self.api_key = key
+        if self.api_key:
+            self.session.headers.update({
+                "Authorization": f"Bearer {self.api_key}",
+                "User-Agent": "jarvis-venice-client/2.0",
+                "Content-Type": "application/json"
+            })
+
+    def chat_completion(self, prompt: str, model: str = "venice-uncensored", system: str = None) -> str:
+        if not self.api_key:
+            return "⚠️ API Key നൽകിയിട്ടില്ല! '⚙️ API Config' ടാബിൽ പോയി നിങ്ങളുടെ Venice API Key നൽകുക."
+
+        messages = []
+        if system:
+            messages.append({"role": "system", "content": system})
+        messages.append({"role": "user", "content": prompt})
+
+        body = {
+            "model": model,
+            "messages": messages,
+            "temperature": 0.7
+        }
+        
+        try:
+            resp = self.session.post(f"{self.base_url}/chat/completions", json=body, timeout=60)
+            if resp.status_code == 200:
+                data = resp.json()
+                return data["choices"][0]["message"]["content"]
+            else:
+                return f"Venice API Error (HTTP {resp.status_code}): {resp.text}"
+        except Exception as e:
+            return f"Connection Failed: {str(e)}"
+
+    def generate_image(self, prompt: str, model: str = "flux-dev") -> str:
+        if not self.api_key:
+            return ""
+
+        body = {"model": model, "prompt": prompt, "format": "png"}
+        try:
+            resp = self.session.post(f"{self.base_url}/image/generate", json=body, timeout=60)
+            if resp.status_code == 200:
+                data = resp.json()
+                images = data.get("images", [])
+                if images:
+                    return images[0]
+            return ""
+        except Exception as e:
+            return ""
+
+client = VeniceAdvancedClient()
+
+# 3. HTML + CSS + JS Frontend Template
+HTML_TEMPLATE = """
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Jarvis & Venice Advanced AI Suite</title>
+<style>
+* { box-sizing: border-box; }
+body {
+    margin: 0;
+    font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+    background: #090d16;
+    color: #f8fafc;
+    display: flex;
+    height: 100vh;
+}
+.sidebar {
+    width: 280px;
+    background: #020617;
+    border-right: 1px solid #1e293b;
+    display: flex;
+    flex-direction: column;
+    padding: 20px;
+}
+.sidebar h2 {
+    color: #38bdf8;
+    font-size: 18px;
+    margin-top: 0;
+}
+.nav-btn {
+    width: 100%;
+    padding: 12px;
+    background: #1e293b;
+    color: white;
+    border: 1px solid #334155;
+    border-radius: 8px;
+    cursor: pointer;
+    margin-bottom: 10px;
+    font-weight: 600;
+    text-align: left;
+    transition: 0.2s;
+}
+.nav-btn:hover, .nav-btn.active {
+    background: #0284c7;
+    border-color: #0284c7;
+}
+.main {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+}
+header {
+    padding: 16px 24px;
+    background: #020617;
+    border-bottom: 1px solid #1e293b;
+    font-size: 18px;
+    color: #38bdf8;
+    font-weight: bold;
+    display: flex;
+    justify-content: space-between;
+}
+.content-area {
+    flex: 1;
+    overflow-y: auto;
+    padding: 24px;
+    display: flex;
+    flex-direction: column;
+}
+.chat-box {
+    flex: 1;
+    overflow-y: auto;
+    margin-bottom: 20px;
+}
+.message {
+    padding: 14px 18px;
+    margin: 10px 0;
+    border-radius: 10px;
+    max-width: 800px;
+    line-height: 1.5;
+    white-space: pre-wrap;
+}
+.user { background: #1e293b; margin-left: auto; border: 1px solid #334155; }
+.ai { background: #0f172a; border: 1px solid #0284c7; }
+.input-panel {
+    display: flex;
+    gap: 10px;
+    max-width: 900px;
+    width: 100%;
+    margin: auto;
+}
+textarea, input[type="text"] {
+    flex: 1;
+    padding: 14px;
+    border-radius: 8px;
+    background: #1e293b;
+    border: 1px solid #334155;
+    color: white;
+    resize: none;
+    font-size: 15px;
+    outline: none;
+}
+textarea:focus, input:focus { border-color: #0284c7; }
+.send-btn {
+    background: #0284c7;
+    color: white;
+    border: none;
+    padding: 0 24px;
+    border-radius: 8px;
+    font-weight: bold;
+    cursor: pointer;
+}
+.send-btn:hover { background: #0369a1; }
+.hidden { display: none; }
+</style>
+</head>
+<body>
+
+<div class="sidebar">
+    <h2>⚡ Jarvis & Venice AI</h2>
+    <button class="nav-btn active" onclick="switchTab('chat', event)">💬 Advanced Chat</button>
+    <button class="nav-btn" onclick="switchTab('image', event)">🎨 AI Image Generator</button>
+    <button class="nav-btn" onclick="switchTab('settings', event)">⚙️ API Config</button>
+</div>
+
+<main class="main">
+    <header>
+        <span id="header-title">Advanced AI Chat Assistant</span>
+        <span style="font-size: 13px; color: #4ade80;">● Online Suite</span>
+    </header>
+
+    <div class="content-area">
+        <!-- Chat Tab -->
+        <div id="tab-chat" class="content-tab" style="display: flex; flex-direction: column; height: 100%;">
+            <div id="chat-messages" class="chat-box">
+                <div class="message ai">ഹലോ! ഞാൻ നിങ്ങളുടെ അഡ്വാൻസ്ഡ് ജാർവിസ് എഐ അസിസ്റ്റന്റ് ആണ്. നിങ്ങൾക്ക് ആവശ്യമായ എല്ലാ ചോദ്യങ്ങളും ഇവിടെ ചോദിക്കാം!</div>
+            </div>
+            <div class="input-panel">
+                <textarea id="chat-input" rows="2" placeholder="Ask Jarvis anything..." onkeydown="if(event.key==='Enter' && !event.shiftKey){event.preventDefault(); sendChatMessage();}"></textarea>
+                <button class="send-btn" onclick="sendChatMessage()">Send</button>
+            </div>
+        </div>
+
+        <!-- Image Generation Tab -->
+        <div id="tab-image" class="content-tab hidden">
+            <h3>Flux Image Generation (Venice AI)</h3>
+            <div class="input-panel" style="margin-bottom: 20px;">
+                <input type="text" id="image-prompt" placeholder="Describe the image you want to create...">
+                <button class="send-btn" onclick="generateImage()">Generate</button>
+            </div>
+            <div id="image-result" style="text-align: center;"></div>
+        </div>
+
+        <!-- Settings Tab -->
+        <div id="tab-settings" class="content-tab hidden">
+            <h3>Configuration</h3>
+            <p>നിങ്ങളുടെ Venice.ai API Key ഇവിടെ നൽകി അപ്‌ഡേറ്റ് ചെയ്യുക:</p>
+            <input type="text" id="api-key-input" placeholder="Enter Venice API Key..." style="width: 100%; max-width: 400px; margin-bottom: 10px;">
+            <br>
+            <button class="send-btn" style="padding: 12px 24px;" onclick="saveApiKey()">Save Key</button>
+        </div>
+    </div>
+</main>
+
+<script>
+function switchTab(tabName, evt) {
+    document.querySelectorAll('.content-tab').forEach(el => el.classList.add('hidden'));
+    document.querySelectorAll('.nav-btn').forEach(el => el.classList.remove('active'));
+    
+    document.getElementById('tab-' + tabName).classList.remove('hidden');
+    evt.currentTarget.classList.add('active');
+    
+    const titles = {'chat': 'Advanced AI Chat Assistant', 'image': 'AI Image Studio', 'settings': 'System Settings'};
+    document.getElementById('header-title').textContent = titles[tabName];
+}
+
+async function sendChatMessage() {
+    const input = document.getElementById('chat-input');
+    const chatBox = document.getElementById('chat-messages');
+    const text = input.value.trim();
+    if (!text) return;
+
+    const userDiv = document.createElement('div');
+    userDiv.className = 'message user';
+    userDiv.textContent = text;
+    chatBox.appendChild(userDiv);
+    input.value = '';
+    chatBox.scrollTop = chatBox.scrollHeight;
+
+    const aiDiv = document.createElement('div');
+    aiDiv.className = 'message ai';
+    aiDiv.textContent = 'Jarvis ചിന്തിക്കുന്നു...';
+    chatBox.appendChild(aiDiv);
+    chatBox.scrollTop = chatBox.scrollHeight;
+
+    try {
+        const response = await fetch('/api/chat', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({message: text})
+        });
+        const data = await response.json();
+        aiDiv.textContent = data.reply || 'No response';
+    } catch(err) {
+        aiDiv.textContent = 'Connection error occurred.';
+    }
+    chatBox.scrollTop = chatBox.scrollHeight;
+}
+
+async function generateImage() {
+    const prompt = document.getElementById('image-prompt').value;
+    const resultDiv = document.getElementById('image-result');
+    if (!prompt) return;
+
+    resultDiv.innerHTML = "Image generating, please wait...";
+    try {
+        const response = await fetch('/api/image', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({prompt: prompt})
+        });
+        const data = await response.json();
+        if (data.image) {
+            resultDiv.innerHTML = `<img src="data:image/png;base64,${data.image}" style="max-width: 100%; border-radius: 10px; border: 1px solid #334155;">`;
+        } else {
+            resultDiv.innerHTML = "Image generation failed. Ensure API key is configured.";
+        }
+    } catch(err) {
+        resultDiv.innerHTML = "Error generating image.";
+    }
+}
+
+async function saveApiKey() {
+    const key = document.getElementById('api-key-input').value.trim();
+    if (!key) { alert('വാലിഡ് ആയ API Key നൽകുക'); return; }
+    
+    const response = await fetch('/api/set-key', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({key: key})
+    });
+    const data = await response.json();
+    alert(data.status);
+}
+</script>
+</body>
+</html>
+"""
+
+# 4. Flask API Routes
+@app.route("/")
+def home():
+    return render_template_string(HTML_TEMPLATE)
+
+@app.route("/api/chat", methods=["POST"])
+def api_chat():
+    data = request.get_json() or {}
+    message = data.get("message", "")
+    reply = client.chat_completion(message, system="Your name is JARVIS. You are an advanced AI assistant.")
+    return jsonify({"reply": reply})
+
+@app.route("/api/image", methods=["POST"])
+def api_image():
+    data = request.get_json() or {}
+    prompt = data.get("prompt", "")
+    img_data = client.generate_image(prompt)
+    return jsonify({"image": img_data})
+
+@app.route("/api/set-key", methods=["POST"])
+def set_key():
+    data = request.get_json() or {}
+    key = data.get("key", "")
+    client.update_headers(key)
+    return jsonify({"status": "API Key വിജയകരമായി സെറ്റ് ചെയ്തു!"})
+
+# 5. Run Application
+if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=5000, debug=True)
